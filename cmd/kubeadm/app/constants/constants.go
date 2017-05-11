@@ -92,6 +92,9 @@ const (
 
 	// DefaultAdmissionControl specifies the default admission control options that will be used
 	DefaultAdmissionControl = "NamespaceLifecycle,LimitRanger,ServiceAccount,PersistentVolumeLabel,DefaultStorageClass,ResourceQuota,DefaultTolerationSeconds"
+
+	// DefaultEtcdIPSuffix specifies the offset value for the service CIDR that will make the etcd service IPv4
+	DefaultEtcdIPSuffix = 15
 )
 
 var (

@@ -74,5 +74,18 @@ func setInitDynamicDefaults(cfg *kubeadmapi.MasterConfiguration) error {
 		}
 	}
 
+	if cfg.Etcd.Cluster.ServiceIP == "" {
+		ip, ipnet, err := net.ParseCIDR(cfg.Networking.ServiceSubnet)
+		if err != nil {
+			return fmt.Errorf("Could not parse service IP CIDR: %v", err)
+		}
+		ipv4 := ip.To4()
+		ipv4[3] = kubeadmconstants.DefaultEtcdIPSuffix
+		if !ipnet.Contains(ipv4) {
+			return fmt.Errorf("etcd service IP could not be constructed successfully")
+		}
+		cfg.Etcd.Cluster.ServiceIP = ipv4.String()
+	}
+
 	return nil
 }

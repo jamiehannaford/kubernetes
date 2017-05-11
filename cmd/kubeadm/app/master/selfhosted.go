@@ -57,6 +57,11 @@ func CreateSelfHostedControlPlane(cfg *kubeadmapi.MasterConfiguration, client *c
 	volumes = append(volumes, flockVolume())
 	volumeMounts = append(volumeMounts, flockVolumeMount())
 
+	// create etcd service which fans out to eventual etcd cluster
+	if err := createEtcdService(cfg, client); err != nil {
+		return err
+	}
+
 	if err := launchSelfHostedAPIServer(cfg, client, volumes, volumeMounts); err != nil {
 		return err
 	}
@@ -66,6 +71,14 @@ func CreateSelfHostedControlPlane(cfg *kubeadmapi.MasterConfiguration, client *c
 	}
 
 	if err := launchSelfHostedControllerManager(cfg, client, volumes, volumeMounts); err != nil {
+		return err
+	}
+
+	if err := launchSelfHostedProxy(cfg, client); err != nil {
+		return err
+	}
+
+	if err := launchEtcdOperator(cfg, client); err != nil {
 		return err
 	}
 
@@ -138,7 +151,6 @@ func launchSelfHostedControllerManager(cfg *kubeadmapi.MasterConfiguration, clie
 
 	fmt.Printf("[self-hosted] self-hosted kube-controller-manager ready after %f seconds\n", time.Since(start).Seconds())
 	return nil
-
 }
 
 func launchSelfHostedScheduler(cfg *kubeadmapi.MasterConfiguration, client *clientset.Clientset, volumes []v1.Volume, volumeMounts []v1.VolumeMount) error {
@@ -161,16 +173,16 @@ func launchSelfHostedScheduler(cfg *kubeadmapi.MasterConfiguration, client *clie
 
 // waitForPodsWithLabel will lookup pods with the given label and wait until they are all
 // reporting status as running.
-func waitForPodsWithLabel(client *clientset.Clientset, appLabel string, mustBeRunning bool) {
+func waitForPodsWithLabel(client *clientset.Clientset, label string, mustBeRunning bool) {
 	wait.PollInfinite(kubeadmconstants.APICallRetryInterval, func() (bool, error) {
 		// TODO: Do we need a stronger label link than this?
-		listOpts := metav1.ListOptions{LabelSelector: fmt.Sprintf("k8s-app=%s", appLabel)}
+		listOpts := metav1.ListOptions{LabelSelector: fmt.Sprintf("k8s-app=%s", label)}
 		apiPods, err := client.Pods(metav1.NamespaceSystem).List(listOpts)
 		if err != nil {
-			fmt.Printf("[self-hosted] error getting %s pods [%v]\n", appLabel, err)
+			fmt.Printf("[self-hosted] error getting %s pods [%v]\n", label, err)
 			return false, nil
 		}
-		fmt.Printf("[self-hosted] Found %d %s pods\n", len(apiPods.Items), appLabel)
+		fmt.Printf("[self-hosted] Found %d %s pods\n", len(apiPods.Items), label)
 
 		// TODO: HA
 		if int32(len(apiPods.Items)) != 1 {
@@ -196,7 +208,7 @@ func getAPIServerDS(cfg *kubeadmapi.MasterConfiguration, volumes []v1.Volume, vo
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "self-hosted-" + kubeAPIServer,
-			Namespace: "kube-system",
+			Namespace: metav1.NamespaceSystem,
 			Labels:    map[string]string{"k8s-app": "self-hosted-" + kubeAPIServer},
 		},
 		Spec: ext.DaemonSetSpec{
@@ -214,8 +226,9 @@ func getAPIServerDS(cfg *kubeadmapi.MasterConfiguration, volumes []v1.Volume, vo
 					Volumes:      volumes,
 					Containers: []v1.Container{
 						{
-							Name:          "self-hosted-" + kubeAPIServer,
-							Image:         images.GetCoreImage(images.KubeAPIServerImage, cfg, kubeadmapi.GlobalEnvParams.HyperkubeImage),
+							Name:  "self-hosted-" + kubeAPIServer,
+							Image: images.GetCoreImage(images.KubeAPIServerImage, cfg, kubeadmapi.GlobalEnvParams.HyperkubeImage),
+							// Need to append etcd service IP
 							Command:       getAPIServerCommand(cfg, true, kubeVersion),
 							Env:           getSelfHostedAPIServerEnv(),
 							VolumeMounts:  volumeMounts,
@@ -240,7 +253,7 @@ func getControllerManagerDeployment(cfg *kubeadmapi.MasterConfiguration, volumes
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "self-hosted-" + kubeControllerManager,
-			Namespace: "kube-system",
+			Namespace: metav1.NamespaceSystem,
 			Labels:    map[string]string{"k8s-app": "self-hosted-" + kubeControllerManager},
 		},
 		Spec: ext.DeploymentSpec{
@@ -292,7 +305,7 @@ func getSchedulerDeployment(cfg *kubeadmapi.MasterConfiguration, volumes []v1.Vo
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "self-hosted-" + kubeScheduler,
-			Namespace: "kube-system",
+			Namespace: metav1.NamespaceSystem,
 			Labels:    map[string]string{"k8s-app": "self-hosted-" + kubeScheduler},
 		},
 		Spec: ext.DeploymentSpec{

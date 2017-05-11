@@ -28,8 +28,6 @@ import (
 )
 
 const (
-	// KubeProxyClusterRoleName sets the name for the kube-proxy ClusterRole
-	KubeProxyClusterRoleName = "system:node-proxier"
 	// NodeBootstrapperClusterRoleName sets the name for the TLS Node Bootstrapper ClusterRole
 	NodeBootstrapperClusterRoleName = "system:node-bootstrapper"
 	// BootstrapSignerClusterRoleName sets the name for the ClusterRole that allows access to ConfigMaps in the kube-public ns
@@ -67,12 +65,6 @@ func CreateServiceAccounts(clientset *clientset.Clientset) error {
 		{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      kubeadmconstants.KubeDNSServiceAccountName,
-				Namespace: metav1.NamespaceSystem,
-			},
-		},
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      kubeadmconstants.KubeProxyServiceAccountName,
 				Namespace: metav1.NamespaceSystem,
 			},
 		},
@@ -153,23 +145,6 @@ func CreateClusterRoleBindings(clientset *clientset.Clientset) error {
 				{
 					Kind: "Group",
 					Name: bootstrapapi.BootstrapGroup,
-				},
-			},
-		},
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "kubeadm:node-proxier",
-			},
-			RoleRef: rbac.RoleRef{
-				APIGroup: rbacAPIGroup,
-				Kind:     clusterRoleKind,
-				Name:     KubeProxyClusterRoleName,
-			},
-			Subjects: []rbac.Subject{
-				{
-					Kind:      serviceAccountKind,
-					Name:      kubeadmconstants.KubeProxyServiceAccountName,
-					Namespace: metav1.NamespaceSystem,
 				},
 			},
 		},

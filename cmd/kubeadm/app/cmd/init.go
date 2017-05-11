@@ -205,7 +205,6 @@ func (i *Init) Run(out io.Writer) error {
 	}
 
 	// PHASE 2: Generate kubeconfig files for the admin and the kubelet
-
 	masterEndpoint := fmt.Sprintf("https://%s:%d", i.cfg.API.AdvertiseAddress, i.cfg.API.BindPort)
 	err = kubeconfigphase.CreateInitKubeConfigFiles(masterEndpoint, i.cfg.CertificatesDir, kubeadmapi.GlobalEnvParams.KubernetesDir)
 	if err != nil {
@@ -227,17 +226,21 @@ func (i *Init) Run(out io.Writer) error {
 		return err
 	}
 
-	// Is deployment type self-hosted?
+	// PHASE 4: Is this install self-hosted?
 	if i.cfg.SelfHosted {
-		// Temporary control plane is up, now we create our self hosted control
+		// 4a. Temporary control plane is up, now we create our self hosted control
 		// plane components and remove the static manifests:
 		fmt.Println("[self-hosted] Creating self-hosted control plane...")
 		if err := kubemaster.CreateSelfHostedControlPlane(i.cfg, client); err != nil {
 			return err
 		}
+		// 4b. Create the etcd-cluster TPR
+		if err := kubemaster.CreateEtcdCluster(i.cfg, client); err != nil {
+			return err
+		}
 	}
 
-	// PHASE 4: Set up the bootstrap tokens
+	// PHASE 5: Set up the bootstrap tokens
 	if !i.skipTokenPrint {
 		fmt.Printf("[token] Using token: %s\n", i.cfg.Token)
 	}
@@ -251,9 +254,7 @@ func (i *Init) Run(out io.Writer) error {
 		return err
 	}
 
-	// PHASE 5: Install and deploy all addons, and configure things as necessary
-
-	// Create the necessary ServiceAccounts
+	// PHASE 6: Install and deploy all addons, and configure things as necessary
 	err = apiconfigphase.CreateServiceAccounts(client)
 	if err != nil {
 		return err

@@ -44,6 +44,7 @@ const (
 	DefaultCloudConfigPath = "/etc/kubernetes/cloud-config"
 
 	etcd                  = "etcd"
+	bootEtcd              = "boot-etcd"
 	apiServer             = "apiserver"
 	controllerManager     = "controller-manager"
 	scheduler             = "scheduler"
@@ -52,6 +53,9 @@ const (
 	kubeControllerManager = "kube-controller-manager"
 	kubeScheduler         = "kube-scheduler"
 	kubeProxy             = "kube-proxy"
+	etcdOperator          = "etcd-operator"
+	etcdCluster           = "kube-etcd"
+	etcdService           = "etcd-service"
 )
 
 var (
@@ -118,12 +122,20 @@ func WriteStaticPodManifests(cfg *kubeadmapi.MasterConfiguration) error {
 	// Add etcd static pod spec only if external etcd is not configured
 	if len(cfg.Etcd.Endpoints) == 0 {
 		etcdPod := componentPod(api.Container{
-			Name:          etcd,
-			Command:       getEtcdCommand(cfg),
-			VolumeMounts:  []api.VolumeMount{certsVolumeMount(), etcdVolumeMount(cfg.Etcd.DataDir), k8sVolumeMount()},
-			Image:         images.GetCoreImage(images.KubeEtcdImage, cfg, kubeadmapi.GlobalEnvParams.EtcdImage),
-			LivenessProbe: componentProbe(2379, "/health", api.URISchemeHTTP),
-		}, certsVolume(cfg), etcdVolume(cfg), k8sVolume())
+			Name:    bootEtcd,
+			Command: getEtcdCommand(cfg),
+			Image:   images.GetCoreImage(images.KubeEtcdImage, cfg, kubeadmapi.GlobalEnvParams.EtcdImage),
+			Env: []api.EnvVar{
+				api.EnvVar{
+					Name: "MY_POD_IP",
+					ValueFrom: &api.EnvVarSource{
+						FieldRef: &api.ObjectFieldSelector{
+							FieldPath: "status.podIP",
+						},
+					},
+				},
+			},
+		})
 
 		etcdPod.Spec.SecurityContext = &api.PodSecurityContext{
 			SELinuxOptions: &api.SELinuxOptions{
@@ -320,6 +332,20 @@ func getComponentBaseCommand(component string) []string {
 	return []string{"kube-" + component}
 }
 
+func chooseEtcdEndpoints(cfg *kubeadmapi.MasterConfiguration) string {
+	var etcdIPs string
+	if len(cfg.Etcd.Endpoints) > 0 {
+		etcdIPs = strings.Join(cfg.Etcd.Endpoints, ",")
+	} else {
+		etcdIPs = "http://127.0.0.1:12379"
+	}
+	return etcdIPs
+}
+
+func chooseEtcdEndpoint(cfg *kubeadmapi.MasterConfiguration) string {
+	return strings.Split(chooseEtcdEndpoints(cfg), ",")[0]
+}
+
 func getAPIServerCommand(cfg *kubeadmapi.MasterConfiguration, selfHosted bool, k8sVersion *version.Version) []string {
 	var command []string
 
@@ -367,11 +393,12 @@ func getAPIServerCommand(cfg *kubeadmapi.MasterConfiguration, selfHosted bool, k
 	}
 
 	// Check if the user decided to use an external etcd cluster
-	if len(cfg.Etcd.Endpoints) > 0 {
-		command = append(command, fmt.Sprintf("--etcd-servers=%s", strings.Join(cfg.Etcd.Endpoints, ",")))
-	} else {
-		command = append(command, "--etcd-servers=http://127.0.0.1:2379")
+	var etcdIPs string
+	if selfHosted {
+		etcdIPs += fmt.Sprintf("http://%s:2379,", cfg.Etcd.Cluster.ServiceIP)
 	}
+	etcdIPs += chooseEtcdEndpoints(cfg)
+	command = append(command, fmt.Sprintf("--etcd-servers=%s", etcdIPs))
 
 	// Is etcd secured?
 	if cfg.Etcd.CAFile != "" {
@@ -399,9 +426,15 @@ func getEtcdCommand(cfg *kubeadmapi.MasterConfiguration) []string {
 	var command []string
 
 	defaultArguments := map[string]string{
-		"listen-client-urls":    "http://127.0.0.1:2379",
-		"advertise-client-urls": "http://127.0.0.1:2379",
-		"data-dir":              cfg.Etcd.DataDir,
+		"name":                        bootEtcd,
+		"listen-client-urls":          "http://0.0.0.0:12379",
+		"listen-peer-urls":            "http://0.0.0.0:12380",
+		"advertise-client-urls":       "http://$(MY_POD_IP):12379",
+		"initial-advertise-peer-urls": "http://$(MY_POD_IP):12380",
+		"initial-cluster":             bootEtcd + "=http://$(MY_POD_IP):12380",
+		"initial-cluster-token":       "bootkube",
+		"initial-cluster-state":       "new",
+		"data-dir":                    cfg.Etcd.DataDir,
 	}
 
 	command = append(command, "etcd")
